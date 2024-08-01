@@ -1,0 +1,12 @@
+[submodule "wasm-blur"]
+	path = wasm-blur
+	url = https://github.com/chicoden/wasm-blur.git
+[submodule "super-solitaire"]
+	path = super-solitaire
+	url = https://github.com/chicoden/super-solitaire.git
+[submodule "snake-on-a-torus"]
+	path = snake-on-a-torus
+	url = https://github.com/chicoden/snake-on-a-torus.git
+[submodule "shadertoy-graph"]
+	path = shadertoy-graph
+	url = https://github.com/chicoden/shadertoy-graph.git

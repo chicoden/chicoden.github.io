@@ -1,2 +1,2 @@
-# chicoden.github.io
-My github pages site.
+# Chicoden
+This is my github pages site.
