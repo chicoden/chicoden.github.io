@@ -10,3 +10,6 @@
 [submodule "shadertoy-graph"]
 	path = shadertoy-graph
 	url = https://github.com/chicoden/shadertoy-graph.git
+[submodule "gpu-water-simulation"]
+	path = gpu-water-simulation
+	url = https://github.com/chicoden/gpu-water-simulation.git
