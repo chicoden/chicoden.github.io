@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <title>Quaternion Soup</title>
+        <style>
+html, body {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    border: 0;
+    overflow: hidden;
+    display: block;
+}
+        </style>
+    </head>
+    <body>
+        <script id="vert-shader" type="text/x-glsl">
+#version 300 es
+precision highp float;
+
+layout(location = 0) in vec2 position;
+
+void main() {
+    gl_Position = vec4(position, 0.0, 1.0);
+}
+        </script>
+        <script id="frag-shader" type="text/x-glsl">
+#version 300 es
+precision mediump float;
+
+uniform vec2 resolution;
+uniform mat3 camera_basis;
+uniform float time;
+out vec4 color;
+
+// vec4(a, b, c, d) = a + bi + cj + dk
+vec4 qmul(in vec4 p, in vec4 q) {
+    return vec4(
+        p.x * q.x - p.y * q.y - p.z * q.z - p.w * q.w,
+        p.x * q.y + p.y * q.x + p.z * q.w - p.w * q.z,
+        p.x * q.z - p.y * q.w + p.z * q.x + p.w * q.y,
+        p.x * q.w + p.y * q.z - p.z * q.y + p.w * q.x
+    );
+}
+
+vec4 qconj(in vec4 p) {
+    return vec4(p.x, -p.yzw);
+}
+
+vec4 qinv(in vec4 q) {
+    return qconj(q) / dot(q, q);
+}
+
+vec3 quat_newton(in vec4 q) {
+    float t = 9.73;
+    vec4 a = vec4(1.5 + 0.1 * cos(t) + 0.01, 2.0, 1.0, 0.25);
+    vec4 b = vec4(-1.0, 0.65 + 0.1 * sin(t), 2.0 + 0.1 * sin(2.0 * t - 0.2), -0.1);
+    vec4 c = vec4(-1.2, 1.25, 1.5, 1.3 + cos(0.5 * t + 0.1));
+
+    for (int i = 0; i < 100; i++) {
+        vec4 qa = q - a, qb = q - b, qc = q - c;
+        vec4 f = qmul(qa, qmul(qb, qc));
+        vec4 df = qmul(qa + qb, qc) + qmul(qa, qb);
+        q -= qmul(f, qinv(df));
+    }
+
+    //return step(vec3(2.0), q.xyz);
+    return 0.5 * vec3(q.x, mix(q.y, q.w, 0.8), q.z);
+}
+
+vec4 sample_image(in vec2 coord) {
+    vec2 uv = (coord - 0.5 * resolution) / resolution.y;
+    vec3 rd = camera_basis * normalize(vec3(uv, -1.0));
+    vec4 q = vec4(rd * 15.0, 10.0);
+
+    float spin = 0.1 * time;
+    float co = cos(spin), si = sin(spin);
+    q.xw *= mat2(co, -si, si, co);
+    q.yw *= mat2(co, -si, si, co);
+    q.zw *= mat2(co, -si, si, co);
+
+    return vec4(quat_newton(q), 1.0);
+}
+
+void main() {
+    color = (
+        sample_image(gl_FragCoord.xy + vec2(0.0, 0.0)) +
+        sample_image(gl_FragCoord.xy + vec2(0.5, 0.0)) +
+        sample_image(gl_FragCoord.xy + vec2(0.0, 0.5)) +
+        sample_image(gl_FragCoord.xy + vec2(0.5, 0.5))
+    ) / 4.0;
+}
+        </script>
+        <script type="text/javascript">
+const CAMERA_ROTATION_SPEED = 3.0;
+
+function compile_shader(gl, type, code) {
+    let shader = gl.createShader(type);
+    gl.shaderSource(shader, code);
+    gl.compileShader(shader);
+
+    if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+        throw new Error(gl.getShaderInfoLog(shader));
+    }
+
+    return shader;
+}
+
+function link_program(gl, shaders) {
+    let program = gl.createProgram();
+    for (let shader of shaders) {
+        gl.attachShader(program, shader);
+    }
+
+    gl.linkProgram(program);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+        throw new Error(gl.getProgramInfoLog(program));
+    }
+
+    for (let shader of shaders) {
+        gl.detachShader(program, shader);
+        gl.deleteShader(shader);
+    }
+
+    return program;
+}
+
+function yaw_basis(basis, delta) {
+    let co = Math.cos(delta);
+    let si = Math.sin(delta);
+
+    let oxx = basis[0], oxy = basis[3], oxz = basis[6];
+    let ozx = basis[2], ozy = basis[5], ozz = basis[8];
+
+    basis[0] = co * oxx - si * ozx;
+    basis[3] = co * oxy - si * ozy;
+    basis[6] = co * oxz - si * ozz;
+
+    basis[2] = si * oxx + co * ozx;
+    basis[5] = si * oxy + co * ozy;
+    basis[8] = si * oxz + co * ozz;
+
+    return basis;
+}
+
+function pitch_basis(basis, delta) {
+    let co = Math.cos(delta);
+    let si = Math.sin(delta);
+
+    let ozx = basis[2], ozy = basis[5], ozz = basis[8];
+    let oyx = basis[1], oyy = basis[4], oyz = basis[7];
+
+    basis[2] = co * ozx - si * oyx;
+    basis[5] = co * ozy - si * oyy;
+    basis[8] = co * ozz - si * oyz;
+
+    basis[1] = si * ozx + co * oyx;
+    basis[4] = si * ozy + co * oyy;
+    basis[7] = si * ozz + co * oyz;
+
+    return basis;
+}
+
+(function main() {
+    let canvas = document.createElement("canvas");
+    document.body.appendChild(canvas);
+
+    let gl = canvas.getContext("webgl2");
+    if (!gl) {
+        alert("No WebGL2 for you :(");
+        throw new Error("failed to get WebGL2 context");
+    }
+
+    let surface_geom = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, surface_geom);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+        -1.0, 3.0,
+        -1.0, -1.0,
+        3.0, -1.0
+    ]), gl.STATIC_DRAW);
+
+    let vert_shader_src = document.getElementById("vert-shader").innerText.trimStart();
+    let frag_shader_src = document.getElementById("frag-shader").innerText.trimStart();
+    let program = link_program(gl, [
+        compile_shader(gl, gl.VERTEX_SHADER, vert_shader_src),
+        compile_shader(gl, gl.FRAGMENT_SHADER, frag_shader_src)
+    ]);
+
+    let uniforms = {
+        resolution: gl.getUniformLocation(program, "resolution"),
+        camera_basis: gl.getUniformLocation(program, "camera_basis"),
+        time: gl.getUniformLocation(program, "time")
+    };
+
+    let camera_basis = new Float32Array([
+        1.0, 0.0, 0.0,
+        0.0, 1.0, 0.0,
+        0.0, 0.0, 1.0
+    ]);
+
+    canvas.addEventListener("click", async () => await canvas.requestPointerLock());
+    canvas.addEventListener("mousemove", function on_mouse_move(event) {
+        if (document.pointerLockElement === canvas) {
+            camera_basis = pitch_basis(camera_basis, event.movementY / window.innerHeight * CAMERA_ROTATION_SPEED);
+            camera_basis = yaw_basis(camera_basis, event.movementX / window.innerHeight * CAMERA_ROTATION_SPEED);
+        }
+    });
+
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+    window.addEventListener("resize", function on_window_resize() {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+    });
+
+    requestAnimationFrame(function render(time) {
+        gl.viewport(0, 0, canvas.width, canvas.height);
+
+        gl.useProgram(program);
+        gl.uniform2f(uniforms.resolution, canvas.width, canvas.height);
+        gl.uniformMatrix3fv(uniforms.camera_basis, false, camera_basis);
+        gl.uniform1f(uniforms.time, time / 1000);
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, surface_geom);
+        gl.enableVertexAttribArray(0);
+        gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+        requestAnimationFrame(render);
+    });
+})();
+        </script>
+    </body>
+</html>
